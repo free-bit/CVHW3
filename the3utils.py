@@ -65,7 +65,7 @@ def check_positive(value):
 def check_lr(value):
     try:
         value = float(value)
-        assert (value > 0.0001) and (value < 0.1)
+        assert (value >= 0.0001) and (value <= 0.1)
     except Exception as e:
         raise argparse.ArgumentTypeError("Float between 0.0001 & 0.1 is expected but got: {}".format(value))
     return value
@@ -144,5 +144,17 @@ def visualize_batch(inputs,preds,targets,save_path=''):
         plt.savefig(save_path)
     else:
         plt.show(block=True)
+
+def plot_loss_epoch(losses):
+    plt.clf()
+    plt.title('Loss vs Epoch')
+    epochs = range(1, len(losses)+1)
+    plt.plot(epochs, losses, 'r--')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.grid(True)
+    plt.show(block=False)
+    # plt.draw()
+    # plt.pause(0.001)
 
 
