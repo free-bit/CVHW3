@@ -82,6 +82,8 @@ def arg_handler():
     # Required flags
     enable_exec = ("-h" not in sys.argv)
     group = parser.add_argument_group(title='required arguments')
+    group.add_argument("-p", "--pipe",  help="Specify pipeline execution mode", type=str,
+                       choices=['train', 'test', 'full'], required=enable_exec, action=UniqueStore)
     group.add_argument("-bs", "--batchsize",  help="Specify batch size", type=check_positive, 
                        metavar="BATCH", required=enable_exec)
     # group.add_argument("-me", "--maxepoch",  help="Specify max number of epochs", type=check_epoch, 

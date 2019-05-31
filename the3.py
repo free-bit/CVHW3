@@ -89,47 +89,39 @@ class AverageMeter(object):
     self.count += n
     self.avg = self.sum / self.count
 
-def test(val_loader, model, criterion, epoch=0, save_images=None):
+def test(test_loader, net, device, criterion, epoch):
     with torch.no_grad():
-        model.eval()
+        net.eval()
 
-        # Prepare value counters and timers
-        batch_time, data_time, losses = AverageMeter(), AverageMeter(), AverageMeter()
+        losses = AverageMeter()
 
-        end = time.time()
-        already_saved_images = False
-        for iteri, data in enumerate(val_loader, 0):
-            data_time.update(time.time() - end)
+        # already_saved_images = False
+        for iteri, data in enumerate(test_loader, 1):
             inputs, targets = data
 
             # Use GPU
-            if ARGS.gpu: 
-                inputs, targets = inputs.cuda(), targets.cuda()
+            inputs, targets = inputs.to(device), targets.to(device)
 
-            # Run model and record loss
-            preds = model(inputs) # throw away class predictions
+            # Run net and record loss
+            preds = net(inputs) # throw away class predictions
             loss = criterion(preds, targets)
             losses.update(loss.item(), inputs.size(0))
+
+            correct_cnt = (preds == targets).float().sum()
 
             # Save images to file
             # if save_images and not already_saved_images:
                 # already_saved_images = True
                 # for j in range(min(len(preds), 10)): # save at most 5 images
                 # save_path = {'grayscale': 'outputs/gray/', 'colorized': 'outputs/color/'}
-                # save_name = 'img-{}-epoch-{}.jpg'.format(i * val_loader.batch_size + j, epoch)
+                # save_name = 'img-{}-epoch-{}.jpg'.format(i * test_loader.batch_size + j, epoch)
                 # to_rgb(inputs[j].cpu(), ab_input=preds[j].detach().cpu(), save_path=save_path, save_name=save_name)
 
-            # Record time to do forward passes and save images
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            # Print model accuracy -- in the code below, val refers to both value and validation
-            if iteri % 25 == 0:
-                print('Validate: [{0}/{1}]\t'
-                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                    'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
-                    iteri, len(val_loader), batch_time=batch_time, loss=losses))
-
+            # Print net accuracy -- in the code below, val refers to both value and validation
+            print_n = 25
+            # Print every print_n mini-batches
+            if (not iteri % print_n):
+                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
         return losses.avg
 
 # def set_learning_rate(last_five_losses):
@@ -139,66 +131,40 @@ def test(val_loader, model, criterion, epoch=0, save_images=None):
 def print_lr(optimizer):
     print(next(iter(optimizer.param_groups))['lr'])
 
-def train():
-    # TODO: Validation frequency to the argparse:
-    val_freq = 3
-    # TODO: Scheduler params to the argparse:
-    factor = 0.1
-    patience = 2
-    min_lr = 0.0001
-    # ---- training code -----
-    device = torch.device(DEVICES[ARGS.gpu])
-    print('Device: ' + str(device))
-    net = ColorNet().to(device=device)
+def train(train_loader, net, device, criterion, optimizer, epoch):
     net.train()
-    criterion = nn.MSELoss()
-    optimizer = optim.SGD(net.parameters(), lr=ARGS.learnrate) # learning rate
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, min_lr=0.0001) # learning rate scheduler
-    train_loader, val_loader = get_loaders(ARGS.batchsize, device)
+    losses = AverageMeter()
+    # Training loss of the network
+    running_loss = 0.0
+    for iteri, data in enumerate(train_loader, 1):
+        inputs, targets = data # inputs: low-resolution images, targets: high-resolution images.
+        
+        inputs, targets = inputs.to(device), targets.to(device)
 
-    if LOAD_CHECKPOINT:
-        print('Loading the model from the checkpoint')
-        model.load_state_dict(os.path.join(LOG_DIR, 'checkpoint.pt'))
+        optimizer.zero_grad() # zero the parameter gradients
 
-    print('Training begins:')
-    for epoch in range(100):#ARGS.maxepoch):  
-        running_loss = 0.0 # training loss of the network
-        for iteri, data in enumerate(train_loader, 0):
-            inputs, targets = data # inputs: low-resolution images, targets: high-resolution images.
+        # Forward, backward, SGD step
+        preds = net(inputs)
+        loss = criterion(preds, targets)
+        loss.backward()
+        optimizer.step()
+        losses.update(loss.item(), inputs.size(0))
 
-            optimizer.zero_grad() # zero the parameter gradients
+        # Print loss
+        print_n = 100 # feel free to change this constant
+        if (not iteri % print_n):    # print every print_n mini-batches
+            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, losses.avg))
+            losses.reset()
+            # print_lr(optimizer)
 
-            # do forward, backward, SGD step
-            preds = net(inputs)
-            loss = criterion(preds, targets)
-            loss.backward()
-            optimizer.step()
+        if (iteri==0) and VISUALIZE: 
+            visualize_batch(inputs, preds, targets)
 
-            # print loss
-            running_loss += loss.item()
-            print_n = 100 # feel free to change this constant
-            if iteri % print_n == (print_n-1):    # print every print_n mini-batches
-                print('[%d, %5d] network-loss: %.5f' %
-                    (epoch + 1, iteri + 1, running_loss / 100))
-                running_loss = 0.0
-                # print_lr(optimizer)
-
-            if (iteri==0) and VISUALIZE: 
-                visualize_batch(inputs,preds,targets)
-
-        print('Saving the model, end of epoch %d' % (epoch+1))
-        if not os.path.exists(LOG_DIR):
-            os.makedirs(LOG_DIR)
-        torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint.pt'))
-        visualize_batch(inputs,preds,targets,os.path.join(LOG_DIR, 'example.png'))
-        # val_freq is the frequency of running tests on validation data in terms of # of epochs 
-        if (val_freq == 1) or (epoch+1) % val_freq == 0:
-            print("Testing the trained model on the validation set...")
-            val_loss = test(val_loader, net, criterion)
-            print('Finished validation!')
-            print("Average validation loss:", val_loss)
-
-    print('Finished training!')
+    print('Saving the model, end of epoch %d' % (epoch))
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+    torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint.pt'))
+    visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example.png'))
 
 def get_current_config():
     global ARGS
@@ -222,7 +188,49 @@ def main():
     # If required args are parsed properly
     if ARGS:
         show_current_config()
-        train()
+        # Construct network
+        seed = 5 # TODO: to the argparse later
+        torch.manual_seed(seed)
+        device = torch.device(DEVICES[ARGS.gpu])
+        print('Device: ' + str(device))
+        net = ColorNet().to(device=device)
+        # Mean Squared Error
+        criterion = nn.MSELoss()
+        # Optimizer: Stochastic Gradient Descend with initial learning rate
+        optimizer = optim.SGD(net.parameters(), lr=ARGS.learnrate)
+        # Learning rate scheduler
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, 
+                                                         patience=2, min_lr=0.0001, verbose=True)
+        # val_freq is the frequency of running tests on validation data in terms of # of epochs 
+        val_freq = 3
+        factor = 0.1
+        patience = 2
+        min_lr = 0.0001
+        # TODO: Validation frequency to the argparse:
+        # TODO: Scheduler params to the argparse:
+
+        train_loader, val_loader = get_loaders(ARGS.batchsize, device)
+        if LOAD_CHECKPOINT:
+            print('Loading the net from the checkpoint')
+            net.load_state_dict(os.path.join(LOG_DIR, 'checkpoint.pt'))
+        # TODO: implement pipeline for train+validation and test
+        run_full = (ARGS.pipe == "full")
+        run_train = (ARGS.pipe == "train")
+        run_test = (ARGS.pipe == "test")
+        if (run_train or run_full):
+            # Traning mode
+            print('Training started.')
+            for epoch in range(1, 100): #TODO: autoset epoch later
+                train(train_loader, net, device, criterion, optimizer, epoch)
+                print('Validation started.')
+                val_loss = test(val_loader, net, device, criterion, epoch)
+                scheduler.step(val_loss)
+                print('Validation loss: %.4f' % val_loss)
+                print('Validation finished!')
+            print('Training finished!')
+
+        elif (run_test or run_full):
+            pass #TODO:
 
 if __name__ == "__main__":
     main()
