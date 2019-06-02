@@ -43,8 +43,7 @@ def get_pad_count(n, s, f):
     assert padding.is_integer()
     return int(padding)
 
-# ---- ConvNet -----
-# TODO: Construct network
+# CNN
 class ColorNet(nn.Module):
     def __init__(self):
         super(ColorNet, self).__init__()
@@ -52,21 +51,27 @@ class ColorNet(nn.Module):
         self.layers = []
         # Get padding needed
         pad = get_pad_count(80, 1, ARGS.kernelsize)
-        # Starting conv Layer: (input image channel: 1, output channel: K, square kernel: FxF)
-        clayer = nn.Conv2d(in_channels=1, out_channels=ARGS.kernelcount, kernel_size=ARGS.kernelsize, 
+        layer_count = ARGS.clayers
+        kernel_count = ARGS.kernelcount if layer_count > 1 else 3
+        kernel_size = ARGS.kernelsize
+        # First layer: (input image channel: 1, output channel: K or 3, square kernel: FxF)
+        clayer = nn.Conv2d(in_channels=1, out_channels=kernel_count, kernel_size=kernel_size, 
                            bias=True, padding=pad)
         relu = nn.ReLU()
         self.layers.extend([clayer, relu])
-        for i in range(1, ARGS.clayers-1):
+        # Mid layers
+        for i in range(0, layer_count-2): # Total-First-Last
             # Conv Layer: (input image channel: K, output channel: K, square kernel: FxF)
-            clayer = nn.Conv2d(in_channels=ARGS.kernelcount, out_channels=ARGS.kernelcount, kernel_size=ARGS.kernelsize, 
+            clayer = nn.Conv2d(in_channels=kernel_count, out_channels=kernel_count, kernel_size=kernel_size, 
                                bias=True, padding=pad)
             # Apply ReLU
             relu = nn.ReLU()
             self.layers.extend([clayer, relu])
-        clayer = nn.Conv2d(in_channels=ARGS.kernelcount, out_channels=3, kernel_size=ARGS.kernelsize, 
-                           bias=True, padding=pad)
-        self.layers.append(clayer)
+        # Last layer
+        if layer_count > 1:
+            clayer = nn.Conv2d(in_channels=kernel_count, out_channels=3, kernel_size=kernel_size, 
+                            bias=True, padding=pad)
+            self.layers.append(clayer)
         # Place layers in a sequence 
         self.layers = nn.Sequential(*self.layers)
         print(self.layers)
@@ -94,8 +99,8 @@ def test(test_loader, net, device, criterion, **kwargs):
     save = kwargs.get('save', False)
     type = kwargs.get('type', "validation")
     all_preds = torch.Tensor() if save else None
+    net.eval()
     with torch.no_grad():
-        net.eval()
 
         losses = AverageMeter()
 
@@ -103,9 +108,7 @@ def test(test_loader, net, device, criterion, **kwargs):
         print_freq = 25
 
         # already_saved_images = False
-        for iteri, data in enumerate(test_loader, 1):
-            inputs, targets = data
-
+        for iteri, (inputs, targets) in enumerate(test_loader, 1):
             # Use GPU
             inputs, targets = inputs.to(device), targets.to(device)
 
@@ -128,7 +131,7 @@ def test(test_loader, net, device, criterion, **kwargs):
             if epoch and (not iteri % print_freq):
                 print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
         if save:
-            write_preds(all_preds, type)
+            write_preds(LOG_DIR, all_preds, type)
         return losses.avg
 
 def print_lr(optimizer):
@@ -146,13 +149,10 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
     inputs = None
     preds = None
     targets = None
-    for iteri, data in enumerate(train_loader, 1):
-        inputs, targets = data # inputs: low-resolution images, targets: high-resolution images.
-        
+    for iteri, (inputs, targets) in enumerate(train_loader, 1):        
         inputs, targets = inputs.to(device), targets.to(device)
-
-        optimizer.zero_grad() # zero the parameter gradients
-
+        # Clear gradients
+        optimizer.zero_grad()
         # Forward, backward, SGD step
         preds = net(inputs)
         loss = criterion(preds, targets)

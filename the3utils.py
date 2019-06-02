@@ -95,7 +95,7 @@ def arg_handler():
     parser.add_argument("-h", "--help", help="Help message", action="store_true")
     parser.add_argument("--gpu", help="Use GPU", action="store_true", default=False)
     parser.add_argument("--maxepoch",  help="Specify max number of epochs for training (default: 100)",
-                        type=check_positive, metavar="EPOCH")
+                        type=check_positive, default=100, metavar="EPOCH")
     parser.add_argument("--valfreq", help="Specify validation frequency in terms of epochs (default: 1)",
                         type=check_positive, default=1, metavar="FREQ")
     parser.add_argument("--factor", help="Specify learning rate decaying factor (default: 0.1)",
@@ -104,8 +104,8 @@ def arg_handler():
                         type=check_non_negative, default=0, metavar="EPOCHS")
     parser.add_argument("--minlr", help="Specify minimum possible learning rate (default: 0.0001)",
                         type=check_lr, default=0.0001)
-    parser.add_argument("--seed", help="Specify seed for pseudorandom initialization (default: 5)",
-                        type=int, default=5)
+    parser.add_argument("--seed", help="Specify seed for pseudorandom initialization (default: 1)",
+                        type=int, default=1)
     # parser.add_argument("--epatience", help="Use GPU", action="store_true", default=False)
 
     # Required flags
@@ -214,11 +214,14 @@ def prepare_loss_epoch_plot(ax, losses, epochs, color, label):
     ax.grid(True)
     ax.legend()
 
-def write_preds(preds, type):
+def write_preds(path, preds, type, denorm=True):
     preds = preds.numpy()
+    if denorm:
+        denorm_vfunc = np.vectorize(lambda x: (255*x + 255) / 2)
+        preds = denorm_vfunc(preds)
     filename = "estimations_" + type
     print('Saving estimations to file {}...'.format(filename))
-    np.save(filename, preds)
+    np.save(path + "/" + filename, preds)
     print('Saved!')
 
 def get_file_paths(top_folder, sub_folder, sub_sub_folder):
