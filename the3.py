@@ -15,6 +15,8 @@ DEVICES = {False: 'cpu', True: 'cuda'}
 LOG_DIR = 'checkpoints'
 VISUALIZE = False # set True to visualize input, prediction and the output from the last batch
 LOAD_CHECKPOINT = False
+DATA_ROOT = 'ceng483-s19-hw3-dataset'
+FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'test'}
 
 # --- imports ---
 from copy import deepcopy
@@ -27,14 +29,16 @@ def get_loaders(batch_size, device, **kwargs):
     load_train = kwargs.get('load_train', False) 
     load_test = kwargs.get('load_test', False)
     loaders = {}
-    data_root = 'ceng483-s19-hw3-dataset'
     if load_train:
-        train_set = HW3ImageFolder(root=os.path.join(data_root, 'train'),device=device)
+        # indices = range(100) # TODO: For sanity check
+        train_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'train'), device=device)
+        # train_set = torch.utils.data.Subset(train_set, indices) # TODO: For sanity check
         loaders['train'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0)
-        val_set = HW3ImageFolder(root=os.path.join(data_root, 'val'),device=device)
+        val_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'val'), device=device)
+        # val_set = torch.utils.data.Subset(val_set, indices) # TODO: For sanity check
         loaders['val'] = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0)
     if load_test:
-        test_set = HW3ImageFolder(root=os.path.join(data_root, 'test'),device=device)
+        test_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'test'), device=device)
         loaders['test'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=False, num_workers=0)
     return loaders
 
@@ -98,11 +102,13 @@ def test(test_loader, net, device, criterion, **kwargs):
     epoch = kwargs.get('epoch', None)
     save = kwargs.get('save', False)
     type = kwargs.get('type', "validation")
-    all_preds = torch.Tensor() if save else None
+    eval = kwargs.get('eval', False)
+    all_preds = torch.Tensor() if save or eval else None
     net.eval()
     with torch.no_grad():
 
         losses = AverageMeter()
+        acc = None
 
         # Print net loss
         print_freq = 25
@@ -114,7 +120,7 @@ def test(test_loader, net, device, criterion, **kwargs):
 
             # Run net and record loss
             preds = net(inputs)
-            if save:
+            if save or eval:
                 all_preds = torch.cat((all_preds, preds.cpu()), dim=0)
             loss = criterion(preds, targets)
             losses.update(loss.item(), inputs.size(0))
@@ -132,7 +138,10 @@ def test(test_loader, net, device, criterion, **kwargs):
                 print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
         if save:
             write_preds(LOG_DIR, all_preds, type)
-        return losses.avg
+        if eval:
+            file_list = get_file_paths(DATA_ROOT, FOLDERS[type], "images")
+            acc = evaluate(all_preds, file_list)
+        return losses.avg, acc
 
 def print_lr(optimizer):
     print(next(iter(optimizer.param_groups))['lr'])
@@ -169,9 +178,11 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         if (iteri==0) and VISUALIZE: 
             visualize_batch(inputs, preds, targets)
 
-    print('Saving the model, end of epoch %d' % (epoch))
-    torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
-    visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
+    # Visualize results periodically
+    draw_freq = 10 # TODO: argparse
+    if (epoch % draw_freq == 0):
+        visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
+
     # Return the average loss for this epoch
     return epoch_loss.avg
 
@@ -227,9 +238,9 @@ def main():
         # min_lr: minimum possible learning rate
         # seed: for pseudorandom initialization
         val_freq = ARGS.valfreq
-        factor = ARGS.factor
-        lr_patience = ARGS.lrpatience
-        min_lr = ARGS.minlr
+        # factor = ARGS.factor
+        # lr_patience = ARGS.lrpatience
+        # min_lr = ARGS.minlr
         seed = ARGS.seed
         # epoch_patience = 2
 
@@ -245,8 +256,8 @@ def main():
         # Optimizer: Stochastic Gradient Descend with initial learning rate
         optimizer = optim.SGD(net.parameters(), lr=lr)
         # Learning rate scheduler
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, 
-                                                         patience=lr_patience, min_lr=min_lr, verbose=True)
+        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, 
+                                                        #  patience=lr_patience, min_lr=min_lr, verbose=True)
         run_full = (pipe == "full")
         run_train = run_full or (pipe == "train")
         run_test = run_full or (pipe == "test")
@@ -263,39 +274,47 @@ def main():
             val_loader = loaders['val']
             train_losses = []
             val_losses = []
+            accuracies = []
             print('Training started.')
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
-            for epoch in range(1, max_epoch): 
-                #TODO: autoset epoch later
-                train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
-                print('Average train loss for current epoch: %.4f' % train_loss)
-                train_losses.append(train_loss)
-                
-                if (val_freq == 1) or (epoch % val_freq == 0):
-                    print('Validation started.')
-                    val_loss = test(val_loader, net, device, criterion, epoch=epoch)
-                    val_losses.append(val_loss)
-                    scheduler.step(val_loss)
-                    print('Average validation loss: %.4f' % val_loss)
-                    print('Validation finished!')
-
-            print('Training finished!')
-            print('Perfoming the last validation...')
-            test(val_loader, net, device, criterion, save=True, type="validation")
-            print('Validation finished!')
-            draw_train_val_plots(train_losses, val_losses)
-            # print('Saving training data...')
-            # save_stats("data_train.txt", train_losses)
-            # save_stats("data_val.txt", val_losses)
-            # print('Saved.')
+            try:
+                for epoch in range(1, max_epoch): 
+                    #TODO: autoset epoch later
+                    train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
+                    print('Average train loss for current epoch: %.4f' % train_loss)
+                    train_losses.append(train_loss)
+                    # Perform validation periodically
+                    if (val_freq == 1) or (epoch % val_freq == 0):
+                        print('Validation started.')
+                        val_loss, acc = test(val_loader, net, device, criterion, epoch=epoch, eval=True)
+                        val_losses.append(val_loss)
+                        accuracies.append(acc)
+                        # scheduler.step(val_loss)
+                        print('Average validation loss: %.4f' % val_loss)
+                        print('Achieved accuracy: %.4f' % acc)
+                        print('Validation finished!')
+                    # If more than 2 epochs have passed and current loss is lower than the previous
+                    if len(train_losses)<2 or (train_losses[-1] < train_losses[-2]):
+                        print('Model improved. Saving current state at the end of epoch %d' % (epoch))
+                        torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
+            except KeyboardInterrupt:
+                print("Keyboard interrupt, stoping execution")
+            finally:
+                print('Training finished!')
+                draw_train_val_plots(train_losses, val_losses, path=LOG_DIR)
+                draw_accuracy_plot(accuracies, len(train_losses), path=LOG_DIR)
+                # print('Saving training data...')
+                # save_stats("data_train.txt", train_losses)
+                # save_stats("data_val.txt", val_losses)
+                # print('Saved.')
 
         elif (run_test):
             test_loader = loaders['test']
             print('Test started.')
-            test_loss = test(test_loader, net, device, criterion, save=True, type="test")
+            test_loss, acc = test(test_loader, net, device, criterion, eval=True, type="test")
             print('Test finished!')
 
 if __name__ == "__main__":
     main()
 
-# TODO: Fix cl issue 1 and 2 gives the same number of layers!
+# TODO: Add Early Stopping feature

@@ -14,6 +14,8 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 
+from utils import read_image
+
 def tensorshow(tensor,cmap=None):
     img = transforms.functional.to_pil_image(tensor/2+0.5)
     if cmap is not None:
@@ -186,15 +188,22 @@ def load_stats(path):
 
 def draw_train_val_plots(train_losses, val_losses, **kwargs):
     combined = kwargs.get("combined", True)
+    save = kwargs.get("save", True)
+    show = kwargs.get("show", True)
+
     plt.close()
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
+    ax.set_title('Loss vs Epoch Graph')
+    ax.set_ylabel("Loss")
+    ax.set_xlabel("Epoch")
+
     # Epoch lengths
     l_train = len(train_losses)
     l_val = len(val_losses)
     # Plot for training
     train_epochs = range(1, l_train+1)
-    prepare_loss_epoch_plot(ax, train_losses, train_epochs, 'blue', 'train')
+    prepare_plot(ax, train_losses, train_epochs, 'blue', 'train')
     # If separate figures desired
     if not combined:
         fig = plt.figure()
@@ -202,15 +211,45 @@ def draw_train_val_plots(train_losses, val_losses, **kwargs):
     # Plot for validation
     val_freq = int(l_train / l_val)
     val_epochs = range(val_freq, l_train+1, val_freq)
-    prepare_loss_epoch_plot(ax, val_losses, val_epochs, 'orange', 'validation')
-    plt.show()
+    prepare_plot(ax, val_losses, val_epochs, 'orange', 'validation')
+    if save:
+        path = kwargs.get("path", None)
+        if path:
+            fig.savefig(path + "/" + 'l_vs_e_plot.png')
+        else:
+            fig.savefig('l_vs_e_plot.png')
+            print("WARNING: Invalid path to save, plot saved under current directory")
+    if show:
+        plt.show()
 
-def prepare_loss_epoch_plot(ax, losses, epochs, color, label):
-    ax.set_title('Loss vs Epoch Graph')
+def draw_accuracy_plot(accuracies, train_epoch, **kwargs):
+    save = kwargs.get("save", True)
+    show = kwargs.get("show", True)
+
+    plt.close()
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_title('Accuracy vs Epoch Graph')
+    ax.set_ylabel("Accuracy")
+    ax.set_xlabel("Epoch")
+
+    l_acc = len(accuracies)
+    eval_freq = int(train_epoch / l_acc)
+    eval_epochs = range(eval_freq, train_epoch+1, eval_freq)
+    prepare_plot(ax, accuracies, eval_epochs, 'red', 'accuracy')
+    if save:
+        path = kwargs.get("path", None)
+        if path:
+            fig.savefig(path + "/" + 'a_vs_e_plot.png')
+        else:
+            fig.savefig('a_vs_e_plot.png')
+            print("WARNING: Invalid path to save, plot saved under current directory")
+    if show:
+        plt.show()
+
+def prepare_plot(ax, losses, epochs, color, label):
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.plot(epochs, losses, "o-", color='tab:'+color, label=label)
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
     ax.grid(True)
     ax.legend()
 
@@ -242,3 +281,35 @@ def get_file_paths(top_folder, sub_folder, sub_sub_folder):
 def write_image_paths(image_paths):
     with open("img_names.txt", "w+") as file:
         file.write('\n'.join(image_paths))
+
+def evaluate(pred_handle, img_handle):
+    estimations, files = None, None
+
+    # Check pred_handle arg
+    if isinstance(pred_handle, torch.Tensor) and (pred_handle.nelement() > 0):
+        estimations = pred_handle.numpy()
+    elif isinstance(pred_handle, str):
+        estimations = np.load(pred_handle)
+    else:
+        print("ERROR: Need a valid file handler or a list of file paths for predictions!")
+        return None
+
+    # Check img_handle arg
+    if isinstance(img_handle, list) and (len(img_handle) > 0):
+        files = img_handle
+    elif isinstance(img_handle, str):
+        with open(img_handle, "r") as f:
+            files = f.readlines()
+    else:
+        print("ERROR: Need a valid file handler or a list of file paths for images!")
+        return None
+    
+    acc = 0
+    for i, file in enumerate(files):
+        cur = read_image(file.rstrip()).reshape(-1).astype(np.int64)
+        est = estimations[i].reshape(-1).astype(np.int64)
+    
+        cur_acc = (np.abs(cur - est) < 12).sum() / cur.shape[0]
+        acc += cur_acc
+    acc /= len(files)
+    return acc
