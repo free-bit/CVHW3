@@ -17,26 +17,26 @@ VISUALIZE = False # set True to visualize input, prediction and the output from 
 LOAD_CHECKPOINT = False
 
 # --- imports ---
-import os
+from copy import deepcopy
 import time
-
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 
 from the3utils import *
 
 # ---- utility functions -----
-def get_loaders(batch_size,device):
-    data_root = 'ceng483-s19-hw3-dataset' 
-    train_set = HW3ImageFolder(root=os.path.join(data_root,'train'),device=device)
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_set = HW3ImageFolder(root=os.path.join(data_root,'val'),device=device)
-    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0)
-    # Note: you may later add test_loader to here.
-    return train_loader, val_loader
+def get_loaders(batch_size, device, **kwargs):
+    load_train = kwargs.get('load_train', False) 
+    load_test = kwargs.get('load_test', False)
+    loaders = {}
+    data_root = 'ceng483-s19-hw3-dataset'
+    if load_train:
+        train_set = HW3ImageFolder(root=os.path.join(data_root, 'train'),device=device)
+        loaders['train'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_set = HW3ImageFolder(root=os.path.join(data_root, 'val'),device=device)
+        loaders['val'] = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0)
+    if load_test:
+        test_set = HW3ImageFolder(root=os.path.join(data_root, 'test'),device=device)
+        loaders['test'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=False, num_workers=0)
+    return loaders
 
 def get_pad_count(n, s, f):
     padding = ((n*s)-s-n+f) / 2
@@ -89,11 +89,18 @@ class AverageMeter(object):
     self.count += n
     self.avg = self.sum / self.count
 
-def test(test_loader, net, device, criterion, epoch):
+def test(test_loader, net, device, criterion, **kwargs):
+    epoch = kwargs.get('epoch', None)
+    save = kwargs.get('save', False)
+    type = kwargs.get('type', "validation")
+    all_preds = torch.Tensor() if save else None
     with torch.no_grad():
         net.eval()
 
         losses = AverageMeter()
+
+        # Print net loss
+        print_freq = 25
 
         # already_saved_images = False
         for iteri, data in enumerate(test_loader, 1):
@@ -103,11 +110,11 @@ def test(test_loader, net, device, criterion, epoch):
             inputs, targets = inputs.to(device), targets.to(device)
 
             # Run net and record loss
-            preds = net(inputs) # throw away class predictions
+            preds = net(inputs)
+            if save:
+                all_preds = torch.cat((all_preds, preds.cpu()), dim=0)
             loss = criterion(preds, targets)
             losses.update(loss.item(), inputs.size(0))
-
-            correct_cnt = (preds == targets).float().sum()
 
             # Save images to file
             # if save_images and not already_saved_images:
@@ -117,25 +124,28 @@ def test(test_loader, net, device, criterion, epoch):
                 # save_name = 'img-{}-epoch-{}.jpg'.format(i * test_loader.batch_size + j, epoch)
                 # to_rgb(inputs[j].cpu(), ab_input=preds[j].detach().cpu(), save_path=save_path, save_name=save_name)
 
-            # Print net accuracy -- in the code below, val refers to both value and validation
-            print_n = 25
-            # Print every print_n mini-batches
-            if (not iteri % print_n):
+            # Print every print_freq mini-batches
+            if epoch and (not iteri % print_freq):
                 print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
+        if save:
+            write_preds(all_preds, type)
         return losses.avg
-
-# def set_learning_rate(last_five_losses):
-#     std = np.std(last_five_losses)
-#     print("Top five deviation:", std)
 
 def print_lr(optimizer):
     print(next(iter(optimizer.param_groups))['lr'])
 
+# Train for one epoch
 def train(train_loader, net, device, criterion, optimizer, epoch):
     net.train()
+    # Keep average training loss for the entire epoch
+    epoch_loss = AverageMeter()
+    # Keep average training loss for each n iteration
     losses = AverageMeter()
-    # Training loss of the network
-    running_loss = 0.0
+    # Print net loss
+    print_freq = 100
+    inputs = None
+    preds = None
+    targets = None
     for iteri, data in enumerate(train_loader, 1):
         inputs, targets = data # inputs: low-resolution images, targets: high-resolution images.
         
@@ -150,10 +160,9 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         optimizer.step()
         losses.update(loss.item(), inputs.size(0))
 
-        # Print loss
-        print_n = 100 # feel free to change this constant
-        if (not iteri % print_n):    # print every print_n mini-batches
+        if (not iteri % print_freq):    # print every print_freq mini-batches
             print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, losses.avg))
+            epoch_loss.update(losses.avg)
             losses.reset()
             # print_lr(optimizer)
 
@@ -161,10 +170,10 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
             visualize_batch(inputs, preds, targets)
 
     print('Saving the model, end of epoch %d' % (epoch))
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
-    torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint.pt'))
-    visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example.png'))
+    torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
+    visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
+    # Return the average loss for this epoch
+    return epoch_loss.avg
 
 def get_current_config():
     global ARGS
@@ -181,56 +190,112 @@ def show_current_config():
     """Print current parameter configuration"""
     print(get_current_config())
 
+def generate_log_dir():
+    global ARGS, LOG_DIR
+    config = deepcopy(vars(ARGS))
+    ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", "minlr", "seed", "pipe"]
+    for key in ignore_keys:
+        config.pop(key, None)
+    rest = ""
+    for item, key in config.items():
+        rest += "_{}{}".format(item, key)
+    LOG_DIR = LOG_DIR + rest + "/"
+    config_file = LOG_DIR + "config.txt"
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+    with open(config_file, "w+") as file:
+        file.write("Command used to run: " + " ".join(sys.argv) + "\n")
+        file.write(get_current_config())
+
 def main():
     global ARGS
     torch.multiprocessing.set_start_method('spawn', force=True)
     ARGS = arg_handler()
     # If required args are parsed properly
     if ARGS:
+        # Main args
+        pipe = ARGS.pipe
+        useGPU = ARGS.gpu
+        max_epoch = ARGS.maxepoch
+        batch_size = ARGS.batchsize
+        lr = ARGS.learnrate
+
+        # Side args
+        # val_freq: the frequency of performing validation in terms of epochs 
+        # factor: decaying factoe
+        # lr_patience: wait for lr improment in terms of epochs
+        # min_lr: minimum possible learning rate
+        # seed: for pseudorandom initialization
+        val_freq = ARGS.valfreq
+        factor = ARGS.factor
+        lr_patience = ARGS.lrpatience
+        min_lr = ARGS.minlr
+        seed = ARGS.seed
+        # epoch_patience = 2
+
         show_current_config()
+
         # Construct network
-        seed = 5 # TODO: to the argparse later
         torch.manual_seed(seed)
-        device = torch.device(DEVICES[ARGS.gpu])
+        device = torch.device(DEVICES[useGPU])
         print('Device: ' + str(device))
         net = ColorNet().to(device=device)
         # Mean Squared Error
         criterion = nn.MSELoss()
         # Optimizer: Stochastic Gradient Descend with initial learning rate
-        optimizer = optim.SGD(net.parameters(), lr=ARGS.learnrate)
+        optimizer = optim.SGD(net.parameters(), lr=lr)
         # Learning rate scheduler
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, 
-                                                         patience=2, min_lr=0.0001, verbose=True)
-        # val_freq is the frequency of running tests on validation data in terms of # of epochs 
-        val_freq = 3
-        factor = 0.1
-        patience = 2
-        min_lr = 0.0001
-        # TODO: Validation frequency to the argparse:
-        # TODO: Scheduler params to the argparse:
-
-        train_loader, val_loader = get_loaders(ARGS.batchsize, device)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, 
+                                                         patience=lr_patience, min_lr=min_lr, verbose=True)
+        run_full = (pipe == "full")
+        run_train = run_full or (pipe == "train")
+        run_test = run_full or (pipe == "test")
+        # Get loaders as dict
+        loaders = get_loaders(ARGS.batchsize, device, load_train=run_train, load_test=run_test)
         if LOAD_CHECKPOINT:
             print('Loading the net from the checkpoint')
-            net.load_state_dict(os.path.join(LOG_DIR, 'checkpoint.pt'))
-        # TODO: implement pipeline for train+validation and test
-        run_full = (ARGS.pipe == "full")
-        run_train = (ARGS.pipe == "train")
-        run_test = (ARGS.pipe == "test")
-        if (run_train or run_full):
-            # Traning mode
+            net.load_state_dict(os.path.join(LOG_DIR, 'checkpoint.pt')) #TODO: Update
+        # Traning mode
+        if (run_train):
+            # Initialization
+            generate_log_dir()
+            train_loader = loaders['train']
+            val_loader = loaders['val']
+            train_losses = []
+            val_losses = []
             print('Training started.')
-            for epoch in range(1, 100): #TODO: autoset epoch later
-                train(train_loader, net, device, criterion, optimizer, epoch)
-                print('Validation started.')
-                val_loss = test(val_loader, net, device, criterion, epoch)
-                scheduler.step(val_loss)
-                print('Validation loss: %.4f' % val_loss)
-                print('Validation finished!')
-            print('Training finished!')
+            print('Validation will be done after every {} epoch(s)'.format(val_freq))
+            for epoch in range(1, max_epoch): 
+                #TODO: autoset epoch later
+                train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
+                print('Average train loss for current epoch: %.4f' % train_loss)
+                train_losses.append(train_loss)
+                
+                if (val_freq == 1) or (epoch % val_freq == 0):
+                    print('Validation started.')
+                    val_loss = test(val_loader, net, device, criterion, epoch=epoch)
+                    val_losses.append(val_loss)
+                    scheduler.step(val_loss)
+                    print('Average validation loss: %.4f' % val_loss)
+                    print('Validation finished!')
 
-        elif (run_test or run_full):
-            pass #TODO:
+            print('Training finished!')
+            print('Perfoming the last validation...')
+            test(val_loader, net, device, criterion, save=True, type="validation")
+            print('Validation finished!')
+            draw_train_val_plots(train_losses, val_losses)
+            # print('Saving training data...')
+            # save_stats("data_train.txt", train_losses)
+            # save_stats("data_val.txt", val_losses)
+            # print('Saved.')
+
+        elif (run_test):
+            test_loader = loaders['test']
+            print('Test started.')
+            test_loss = test(test_loader, net, device, criterion, save=True, type="test")
+            print('Test finished!')
 
 if __name__ == "__main__":
     main()
+
+# TODO: Fix cl issue 1 and 2 gives the same number of layers!
