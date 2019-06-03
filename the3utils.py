@@ -108,6 +108,8 @@ def arg_handler():
                         type=check_lr, default=0.0001)
     parser.add_argument("--seed", help="Specify seed for pseudorandom initialization (default: 1)",
                         type=int, default=1)
+    parser.add_argument("--checkpoint", help="Specify checkpoint for learning to start (default: -)",
+                        type=str, default="")
     # parser.add_argument("--epatience", help="Use GPU", action="store_true", default=False)
 
     # Required flags
@@ -187,6 +189,13 @@ def load_stats(path):
         return losses
 
 def draw_train_val_plots(train_losses, val_losses, **kwargs):
+    # Epoch lengths
+    l_train = len(train_losses)
+    l_val = len(val_losses)
+    if (not l_train) or (not l_val):
+        print("WARNING: No data to plot loss vs epoch!")
+        return
+
     combined = kwargs.get("combined", True)
     save = kwargs.get("save", True)
     show = kwargs.get("show", True)
@@ -198,9 +207,6 @@ def draw_train_val_plots(train_losses, val_losses, **kwargs):
     ax.set_ylabel("Loss")
     ax.set_xlabel("Epoch")
 
-    # Epoch lengths
-    l_train = len(train_losses)
-    l_val = len(val_losses)
     # Plot for training
     train_epochs = range(1, l_train+1)
     prepare_plot(ax, train_losses, train_epochs, 'blue', 'train')
@@ -218,11 +224,16 @@ def draw_train_val_plots(train_losses, val_losses, **kwargs):
             fig.savefig(path + "/" + 'l_vs_e_plot.png')
         else:
             fig.savefig('l_vs_e_plot.png')
-            print("WARNING: Invalid path to save, plot saved under current directory")
+            print("WARNING: Invalid path to save, plot saved under current directory!")
     if show:
         plt.show()
 
 def draw_accuracy_plot(accuracies, train_epoch, **kwargs):
+    l_acc = len(accuracies)
+    if (not l_acc):
+        print("WARNING: No data to plot accuracy vs epoch!")
+        return
+
     save = kwargs.get("save", True)
     show = kwargs.get("show", True)
 
@@ -233,7 +244,6 @@ def draw_accuracy_plot(accuracies, train_epoch, **kwargs):
     ax.set_ylabel("Accuracy")
     ax.set_xlabel("Epoch")
 
-    l_acc = len(accuracies)
     eval_freq = int(train_epoch / l_acc)
     eval_epochs = range(eval_freq, train_epoch+1, eval_freq)
     prepare_plot(ax, accuracies, eval_epochs, 'red', 'accuracy')
@@ -243,7 +253,7 @@ def draw_accuracy_plot(accuracies, train_epoch, **kwargs):
             fig.savefig(path + "/" + 'a_vs_e_plot.png')
         else:
             fig.savefig('a_vs_e_plot.png')
-            print("WARNING: Invalid path to save, plot saved under current directory")
+            print("WARNING: Invalid path to save, plot saved under current directory!")
     if show:
         plt.show()
 

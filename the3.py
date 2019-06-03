@@ -14,13 +14,13 @@ DEVICES = {False: 'cpu', True: 'cuda'}
 # DEVICE_ID = 'cpu' # set to 'cpu' for cpu, 'cuda' / 'cuda:0' or similar for gpu.
 LOG_DIR = 'checkpoints'
 VISUALIZE = False # set True to visualize input, prediction and the output from the last batch
-LOAD_CHECKPOINT = False
 DATA_ROOT = 'ceng483-s19-hw3-dataset'
 FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'test'}
 
 # --- imports ---
 from copy import deepcopy
 import time
+import re
 
 from the3utils import *
 
@@ -133,7 +133,7 @@ def test(test_loader, net, device, criterion, **kwargs):
                 # save_name = 'img-{}-epoch-{}.jpg'.format(i * test_loader.batch_size + j, epoch)
                 # to_rgb(inputs[j].cpu(), ab_input=preds[j].detach().cpu(), save_path=save_path, save_name=save_name)
 
-            # Print every print_freq mini-batches
+            # Print every print_freq mini-batches if validating
             if epoch and (not iteri % print_freq):
                 print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
         if save:
@@ -169,18 +169,18 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         optimizer.step()
         losses.update(loss.item(), inputs.size(0))
 
-        if (not iteri % print_freq):    # print every print_freq mini-batches
+        # Print every print_freq mini-batches
+        if (not iteri % print_freq):
             print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, losses.avg))
             epoch_loss.update(losses.avg)
             losses.reset()
-            # print_lr(optimizer)
 
         if (iteri==0) and VISUALIZE: 
             visualize_batch(inputs, preds, targets)
 
     # Visualize results periodically
     draw_freq = 10 # TODO: argparse
-    if (epoch % draw_freq == 0):
+    if (draw_freq == 1) or (epoch % draw_freq == 0):
         visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
 
     # Return the average loss for this epoch
@@ -195,7 +195,16 @@ def get_current_config():
     lines = ""
     for item, key in config.items():
         lines += "- {}: {}\n".format(item, key)
-    return (message + separator + lines + separator) 
+    return (message + separator + lines + separator)
+
+def override_config(params):
+    global ARGS
+    config = vars(ARGS)
+    ignore_keys = ["help", "gpu", "seed", "pipe"]
+    for key, value in params:
+        if key not in ignore_keys:
+            target_type = type(config[key])
+            config[key] = target_type(value)
 
 def show_current_config():
     """Print current parameter configuration"""
@@ -218,39 +227,65 @@ def generate_log_dir():
         file.write("Command used to run: " + " ".join(sys.argv) + "\n")
         file.write(get_current_config())
 
+# LR Scheduling related:
+# val_freq: the frequency of performing validation in terms of epochs 
+# factor: decaying factor
+# lr_patience: wait for lr improment in terms of epochs
+# min_lr: minimum possible learning rate
+# seed: for pseudorandom initialization
+
 def main():
     global ARGS
     torch.multiprocessing.set_start_method('spawn', force=True)
     ARGS = arg_handler()
     # If required args are parsed properly
     if ARGS:
-        # Main args
+        # Args that can not be overridden
         pipe = ARGS.pipe
         useGPU = ARGS.gpu
-        max_epoch = ARGS.maxepoch
-        batch_size = ARGS.batchsize
-        lr = ARGS.learnrate
-
-        # Side args
-        # val_freq: the frequency of performing validation in terms of epochs 
-        # factor: decaying factoe
-        # lr_patience: wait for lr improment in terms of epochs
-        # min_lr: minimum possible learning rate
-        # seed: for pseudorandom initialization
-        val_freq = ARGS.valfreq
-        # factor = ARGS.factor
-        # lr_patience = ARGS.lrpatience
-        # min_lr = ARGS.minlr
+        checkpoint_path = ARGS.checkpoint
         seed = ARGS.seed
-        # epoch_patience = 2
-
-        show_current_config()
 
         # Construct network
         torch.manual_seed(seed)
         device = torch.device(DEVICES[useGPU])
         print('Device: ' + str(device))
         net = ColorNet().to(device=device)
+        
+        # Start from checkpoint if desired
+        start_epoch = 1
+        if checkpoint_path:
+            check_rxp = r'^(.*)(checkpoint_e(\d+).pt)$'
+            found = re.search(check_rxp, checkpoint_path)
+            path = found.group(1)
+            entire = found.group(2)
+            start_epoch = int(re.search(check_rxp, checkpoint_path).group(3))
+            # print('Loading the net from file: "{}"...'.format(entire))
+            # net.load_state_dict(torch.load(checkpoint_path))
+
+            config = "config.txt"
+            conf_rxp = r'- (.+): (\d+(?:\.\d*)*|\w*)'
+            print('Restoring net parameters from file: "{}" and overriding existing...'.format(config))
+            lines = ""
+            with open(path + config, "r") as conf:
+                lines = "".join(conf.readlines())
+                params = re.findall(conf_rxp, lines)
+                override_config(params)
+            print('Loading completed. Training will start from epoch: {}'.format(start_epoch))
+
+        # Args that can be overridden
+        max_epoch = ARGS.maxepoch
+        batch_size = ARGS.batchsize
+        lr = ARGS.learnrate
+        val_freq = ARGS.valfreq
+
+        # factor = ARGS.factor
+        # lr_patience = ARGS.lrpatience
+        # min_lr = ARGS.minlr
+        # epoch_patience = 2
+
+        show_current_config()
+
         # Mean Squared Error
         criterion = nn.MSELoss()
         # Optimizer: Stochastic Gradient Descend with initial learning rate
@@ -258,14 +293,14 @@ def main():
         # Learning rate scheduler
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=factor, 
                                                         #  patience=lr_patience, min_lr=min_lr, verbose=True)
+        # Determine pipeline execution
         run_full = (pipe == "full")
         run_train = run_full or (pipe == "train")
         run_test = run_full or (pipe == "test")
+
         # Get loaders as dict
         loaders = get_loaders(ARGS.batchsize, device, load_train=run_train, load_test=run_test)
-        if LOAD_CHECKPOINT:
-            print('Loading the net from the checkpoint')
-            net.load_state_dict(os.path.join(LOG_DIR, 'checkpoint.pt')) #TODO: Update
+
         # Traning mode
         if (run_train):
             # Initialization
@@ -278,7 +313,7 @@ def main():
             print('Training started.')
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
             try:
-                for epoch in range(1, max_epoch): 
+                for epoch in range(start_epoch, max_epoch): 
                     #TODO: autoset epoch later
                     train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
                     print('Average train loss for current epoch: %.4f' % train_loss)
@@ -298,7 +333,7 @@ def main():
                         print('Model improved. Saving current state at the end of epoch %d' % (epoch))
                         torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
             except KeyboardInterrupt:
-                print("Keyboard interrupt, stoping execution")
+                print("\nKeyboard interrupt, stoping execution...")
             finally:
                 print('Training finished!')
                 draw_train_val_plots(train_losses, val_losses, path=LOG_DIR)
