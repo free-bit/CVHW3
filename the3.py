@@ -39,7 +39,7 @@ def get_loaders(batch_size, device, **kwargs):
         loaders['val'] = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0)
     if load_test:
         test_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'test'), device=device)
-        loaders['test'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=False, num_workers=0)
+        loaders['test'] = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=0)
     return loaders
 
 def get_pad_count(n, s, f):
@@ -103,11 +103,13 @@ def test(test_loader, net, device, criterion, **kwargs):
     save = kwargs.get('save', False)
     type = kwargs.get('type', "validation")
     eval = kwargs.get('eval', False)
-    all_preds = torch.Tensor() if save or eval else None
+    all_preds = torch.Tensor() if save else None
     net.eval()
     with torch.no_grad():
-
-        losses = AverageMeter()
+        # Keep validation loss for the entire epoch
+        val_loss = AverageMeter()
+        # Keep validation loss for each n iteration
+        iter_loss = AverageMeter()
         acc = None
 
         # Print net loss
@@ -120,10 +122,17 @@ def test(test_loader, net, device, criterion, **kwargs):
 
             # Run net and record loss
             preds = net(inputs)
-            if save or eval:
+
+            if save:
                 all_preds = torch.cat((all_preds, preds.cpu()), dim=0)
+
+            if eval:
+                # file_list = get_file_paths(DATA_ROOT, FOLDERS[type], "images")
+                acc = evaluate(preds, targets)
+
             loss = criterion(preds, targets)
-            losses.update(loss.item(), inputs.size(0))
+            iter_loss.update(loss.item(), inputs.size(0))
+            val_loss.update(loss.item(), inputs.size(0))
 
             # Save images to file
             # if save_images and not already_saved_images:
@@ -135,13 +144,11 @@ def test(test_loader, net, device, criterion, **kwargs):
 
             # Print every print_freq mini-batches if validating
             if epoch and (not iteri % print_freq):
-                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, loss))
+                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.sum))
+                iter_loss.reset()
         if save:
             write_preds(LOG_DIR, all_preds, type)
-        if eval:
-            file_list = get_file_paths(DATA_ROOT, FOLDERS[type], "images")
-            acc = evaluate(all_preds, file_list)
-        return losses.avg, acc
+        return val_loss.sum, acc
 
 def print_lr(optimizer):
     print(next(iter(optimizer.param_groups))['lr'])
@@ -149,10 +156,10 @@ def print_lr(optimizer):
 # Train for one epoch
 def train(train_loader, net, device, criterion, optimizer, epoch):
     net.train()
-    # Keep average training loss for the entire epoch
+    # Keep training loss for the entire epoch
     epoch_loss = AverageMeter()
-    # Keep average training loss for each n iteration
-    losses = AverageMeter()
+    # Keep training loss for each n iteration
+    iter_loss = AverageMeter()
     # Print net loss
     print_freq = 100
     inputs = None
@@ -167,13 +174,13 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         loss = criterion(preds, targets)
         loss.backward()
         optimizer.step()
-        losses.update(loss.item(), inputs.size(0))
+        iter_loss.update(loss.item(), inputs.size(0))
+        epoch_loss.update(loss.item(), inputs.size(0))
 
         # Print every print_freq mini-batches
         if (not iteri % print_freq):
-            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, losses.avg))
-            epoch_loss.update(losses.avg)
-            losses.reset()
+            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, iter_loss.sum))
+            iter_loss.reset()
 
         if (iteri==0) and VISUALIZE: 
             visualize_batch(inputs, preds, targets)
@@ -184,7 +191,7 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
 
     # Return the average loss for this epoch
-    return epoch_loss.avg
+    return epoch_loss.sum
 
 def get_current_config():
     global ARGS
@@ -301,7 +308,7 @@ def main():
         # Get loaders as dict
         loaders = get_loaders(ARGS.batchsize, device, load_train=run_train, load_test=run_test)
 
-        # Traning mode
+        # Training mode
         if (run_train):
             # Initialization
             generate_log_dir()
@@ -313,11 +320,12 @@ def main():
             print('Training started.')
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
             try:
-                for epoch in range(start_epoch, max_epoch): 
+                for epoch in range(start_epoch, max_epoch + 1): 
                     #TODO: autoset epoch later
                     train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
-                    print('Average train loss for current epoch: %.4f' % train_loss)
+                    print('Total train loss for current epoch: %.4f' % train_loss)
                     train_losses.append(train_loss)
+
                     # Perform validation periodically
                     if (val_freq == 1) or (epoch % val_freq == 0):
                         print('Validation started.')
@@ -325,15 +333,18 @@ def main():
                         val_losses.append(val_loss)
                         accuracies.append(acc)
                         # scheduler.step(val_loss)
-                        print('Average validation loss: %.4f' % val_loss)
+                        print('Total validation loss: %.4f' % val_loss)
                         print('Achieved accuracy: %.4f' % acc)
                         print('Validation finished!')
-                    # If more than 2 epochs have passed and current loss is lower than the previous
-                    if len(train_losses)<2 or (train_losses[-1] < train_losses[-2]):
-                        print('Model improved. Saving current state at the end of epoch %d' % (epoch))
+                    
+                    # If more than 2 epochs passed and the current loss is lower, accuracy is higher than previous
+                    if len(accuracies) < 2 or (train_losses[-1] < train_losses[-2]) and (accuracies[-1] > accuracies[-2]):
+                        print('Saving current state at the end of epoch %d' % (epoch))
                         torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
+
             except KeyboardInterrupt:
                 print("\nKeyboard interrupt, stoping execution...")
+                
             finally:
                 print('Training finished!')
                 draw_train_val_plots(train_losses, val_losses, path=LOG_DIR)

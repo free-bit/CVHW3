@@ -16,6 +16,9 @@ import torchvision.transforms as transforms
 
 from utils import read_image
 
+norm_vfunc = np.vectorize(lambda x: (2*x)/255 - 1)
+denorm_vfunc = np.vectorize(lambda x: (255*x + 255) / 2)
+
 def tensorshow(tensor,cmap=None):
     img = transforms.functional.to_pil_image(tensor/2+0.5)
     if cmap is not None:
@@ -207,17 +210,22 @@ def draw_train_val_plots(train_losses, val_losses, **kwargs):
     ax.set_ylabel("Loss")
     ax.set_xlabel("Epoch")
 
-    # Plot for training
-    train_epochs = range(1, l_train+1)
-    prepare_plot(ax, train_losses, train_epochs, 'blue', 'train')
-    # If separate figures desired
-    if not combined:
-        fig = plt.figure()
-        ax = fig.add_subplot(1, 1, 1)
-    # Plot for validation
-    val_freq = int(l_train / l_val)
-    val_epochs = range(val_freq, l_train+1, val_freq)
-    prepare_plot(ax, val_losses, val_epochs, 'orange', 'validation')
+    try:
+        # Plot for training
+        train_epochs = range(1, l_train+1)
+        prepare_plot(ax, train_losses, train_epochs, 'blue', 'train')
+        # If separate figures desired
+        if not combined:
+            fig = plt.figure()
+            ax = fig.add_subplot(1, 1, 1)
+        # Plot for validation
+        val_freq = int(l_train / l_val)
+        val_epochs = range(val_freq, l_train+1, val_freq)
+        prepare_plot(ax, val_losses, val_epochs, 'orange', 'validation')
+    except Exception as e:
+        print("WARNING: " + str(e))
+        return
+
     if save:
         path = kwargs.get("path", None)
         if path:
@@ -246,7 +254,13 @@ def draw_accuracy_plot(accuracies, train_epoch, **kwargs):
 
     eval_freq = int(train_epoch / l_acc)
     eval_epochs = range(eval_freq, train_epoch+1, eval_freq)
-    prepare_plot(ax, accuracies, eval_epochs, 'red', 'accuracy')
+
+    try:
+        prepare_plot(ax, accuracies, eval_epochs, 'red', 'accuracy')
+    except Exception as e:
+        print("WARNING: " + str(e))
+        return
+
     if save:
         path = kwargs.get("path", None)
         if path:
@@ -263,11 +277,8 @@ def prepare_plot(ax, losses, epochs, color, label):
     ax.grid(True)
     ax.legend()
 
-def write_preds(path, preds, type, denorm=True):
-    preds = preds.numpy()
-    if denorm:
-        denorm_vfunc = np.vectorize(lambda x: (255*x + 255) / 2)
-        preds = denorm_vfunc(preds)
+def write_preds(path, preds, type):
+    preds = denorm_vfunc(preds.numpy())
     filename = "estimations_" + type
     print('Saving estimations to file {}...'.format(filename))
     np.save(path + "/" + filename, preds)
@@ -292,34 +303,9 @@ def write_image_paths(image_paths):
     with open("img_names.txt", "w+") as file:
         file.write('\n'.join(image_paths))
 
-def evaluate(pred_handle, img_handle):
-    estimations, files = None, None
-
-    # Check pred_handle arg
-    if isinstance(pred_handle, torch.Tensor) and (pred_handle.nelement() > 0):
-        estimations = pred_handle.numpy()
-    elif isinstance(pred_handle, str):
-        estimations = np.load(pred_handle)
-    else:
-        print("ERROR: Need a valid file handler or a list of file paths for predictions!")
-        return None
-
-    # Check img_handle arg
-    if isinstance(img_handle, list) and (len(img_handle) > 0):
-        files = img_handle
-    elif isinstance(img_handle, str):
-        with open(img_handle, "r") as f:
-            files = f.readlines()
-    else:
-        print("ERROR: Need a valid file handler or a list of file paths for images!")
-        return None
-    
-    acc = 0
-    for i, file in enumerate(files):
-        cur = read_image(file.rstrip()).reshape(-1).astype(np.int64)
-        est = estimations[i].reshape(-1).astype(np.int64)
-    
-        cur_acc = (np.abs(cur - est) < 12).sum() / cur.shape[0]
-        acc += cur_acc
-    acc /= len(files)
-    return acc
+def evaluate(preds, targets):
+    preds, targets = denorm_vfunc(preds.numpy()), denorm_vfunc(targets.numpy())
+    im_size = np.prod(preds.shape[1:])
+    accs_per_image = (np.abs(targets - preds) < 12).sum(axis=(1,2,3)) / im_size
+    avg_acc = np.mean(accs_per_image)
+    return avg_acc
