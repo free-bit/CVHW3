@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import re
 import sys
 
 import matplotlib.pyplot as plt
@@ -182,14 +183,21 @@ def visualize_batch(inputs,preds,targets,save_path=''):
     else:
         plt.show(block=True)
 
-def save_stats(path, losses):
-    with open(path, "w+") as file:
-        file.write(str(losses))
+def save_stats(filename, stats, **kwargs):
+    path = kwargs.get('path', '')
+    with open(path + filename, "w+") as file:
+        for key, value in stats.items():
+            file.write("{}: {}\n".format(key, value))
 
 def load_stats(path):
+    stats = {}
+    regex = r'(\w*): (.*)'
     with open(path, "r") as file:
-        losses = eval(file.readline())
-        return losses
+        lines = "".join(file.readlines())
+        params = re.findall(regex, lines)
+        for key, value in params:
+            stats[key] = eval(value)
+        return stats
 
 def draw_train_val_plots(train_losses, val_losses, **kwargs):
     # Epoch lengths

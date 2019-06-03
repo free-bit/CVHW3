@@ -20,7 +20,6 @@ FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'test'}
 # --- imports ---
 from copy import deepcopy
 import time
-import re
 
 from the3utils import *
 
@@ -144,11 +143,11 @@ def test(test_loader, net, device, criterion, **kwargs):
 
             # Print every print_freq mini-batches if validating
             if epoch and (not iteri % print_freq):
-                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.sum))
+                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.avg))
                 iter_loss.reset()
         if save:
             write_preds(LOG_DIR, all_preds, type)
-        return val_loss.sum, acc
+        return val_loss.avg, acc
 
 def print_lr(optimizer):
     print(next(iter(optimizer.param_groups))['lr'])
@@ -179,7 +178,7 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
 
         # Print every print_freq mini-batches
         if (not iteri % print_freq):
-            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, iter_loss.sum))
+            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, iter_loss.avg))
             iter_loss.reset()
 
         if (iteri==0) and VISUALIZE: 
@@ -191,7 +190,7 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
         visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
 
     # Return the average loss for this epoch
-    return epoch_loss.sum
+    return epoch_loss.avg
 
 def get_current_config():
     global ARGS
@@ -319,11 +318,12 @@ def main():
             accuracies = []
             print('Training started.')
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
+            epoch = 1
             try:
                 for epoch in range(start_epoch, max_epoch + 1): 
                     #TODO: autoset epoch later
                     train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
-                    print('Total train loss for current epoch: %.4f' % train_loss)
+                    print('Training loss (AVG) for current epoch: %.4f' % train_loss)
                     train_losses.append(train_loss)
 
                     # Perform validation periodically
@@ -333,7 +333,7 @@ def main():
                         val_losses.append(val_loss)
                         accuracies.append(acc)
                         # scheduler.step(val_loss)
-                        print('Total validation loss: %.4f' % val_loss)
+                        print('Validation loss (AVG): %.4f' % val_loss)
                         print('Achieved accuracy: %.4f' % acc)
                         print('Validation finished!')
                     
@@ -347,12 +347,19 @@ def main():
                 
             finally:
                 print('Training finished!')
+                print('Saving training data...')
                 draw_train_val_plots(train_losses, val_losses, path=LOG_DIR)
                 draw_accuracy_plot(accuracies, len(train_losses), path=LOG_DIR)
-                # print('Saving training data...')
-                # save_stats("data_train.txt", train_losses)
-                # save_stats("data_val.txt", val_losses)
-                # print('Saved.')
+                stats = {
+                    'train_losses': train_losses,
+                    'val_losses': val_losses,
+                    'accuracies': accuracies,
+                    'total_epoch': epoch,
+                    'best_accuracy_epoch': np.argmax(accuracies) + 1,
+                    'best_loss_epoch': (np.argmin(val_losses) + 1) * val_freq,
+                }
+                save_stats("stats.txt", stats, path=LOG_DIR)
+                print('Saved.')
 
         elif (run_test):
             test_loader = loaders['test']
