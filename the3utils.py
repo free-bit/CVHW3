@@ -99,22 +99,24 @@ def arg_handler():
                                      add_help=False)
     # Optional flags
     parser.add_argument("-h", "--help", help="Help message", action="store_true")
-    parser.add_argument("--gpu", help="Use GPU", action="store_true", default=False)
+    parser.add_argument("--gpu", help="Use GPU (default: False)", action="store_true", default=False)
     parser.add_argument("--maxepoch",  help="Specify max number of epochs for training (default: 100)",
                         type=check_positive, default=100, metavar="EPOCH")
     parser.add_argument("--valfreq", help="Specify validation frequency in terms of epochs (default: 1)",
                         type=check_positive, default=1, metavar="FREQ")
-    parser.add_argument("--factor", help="Specify learning rate decaying factor (default: 0.1)",
-                        type=check_positive, default=0.1)
-    parser.add_argument("--lrpatience", help="Specify patience for learning rate in terms of epochs (default: 0)",
-                        type=check_non_negative, default=0, metavar="EPOCHS")
-    parser.add_argument("--minlr", help="Specify minimum possible learning rate (default: 0.0001)",
-                        type=check_lr, default=0.0001)
-    parser.add_argument("--seed", help="Specify seed for pseudorandom initialization (default: 1)",
-                        type=int, default=1)
+    # parser.add_argument("--factor", help="Specify learning rate decaying factor (default: 0.1)",
+    #                     type=check_positive, default=0.1)
+    # parser.add_argument("--lrpatience", help="Specify patience for learning rate in terms of epochs (default: 0)",
+    #                     type=check_non_negative, default=0, metavar="EPOCHS")
+    # parser.add_argument("--minlr", help="Specify minimum possible learning rate (default: 0.0001)",
+    #                     type=check_lr, default=0.0001)
+    parser.add_argument("--seed", help="Specify seed for pseudorandom initialization (default: 10)",
+                        type=int, default=10)
     parser.add_argument("--checkpoint", help="Specify checkpoint for learning to start (default: -)",
                         type=str, default="")
-    # parser.add_argument("--epatience", help="Use GPU", action="store_true", default=False)
+    parser.add_argument("--earlystop", help="Enable early stop (default: False)", action="store_true", default=False)
+    parser.add_argument("--epatience", help="Specify patience for early stop in terms of epochs (default: 5)",
+                        type=check_non_negative, default=5)
 
     # Required flags
     enable_exec = ("-h" not in sys.argv)

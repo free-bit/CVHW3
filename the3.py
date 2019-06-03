@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
 
-# ---- hyper-parameters ----
-# You should tune these hyper-parameters using:
-# (i) your reasoning and observations, 
-# (ii) by tuning it on the validation set, using the techniques discussed in class.
-# You definitely can add more hyper-parameters here.
-# batch_size = 16
-# max_num_epoch = 100
-# hps = {'lr':0.001} # hyperparameters
-
 # ---- options ----
 DEVICES = {False: 'cpu', True: 'cuda'}
 # DEVICE_ID = 'cpu' # set to 'cpu' for cpu, 'cuda' / 'cuda:0' or similar for gpu.
@@ -143,7 +134,7 @@ def test(test_loader, net, device, criterion, **kwargs):
 
             # Print every print_freq mini-batches if validating
             if epoch and (not iteri % print_freq):
-                print('Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.avg))
+                print('- Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.avg))
                 iter_loss.reset()
         if save:
             write_preds(LOG_DIR, all_preds, type)
@@ -178,7 +169,7 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
 
         # Print every print_freq mini-batches
         if (not iteri % print_freq):
-            print('Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, iter_loss.avg))
+            print('- Training: [E: %d, I: %3d] Loss: %.4f' % (epoch, iteri, iter_loss.avg))
             iter_loss.reset()
 
         if (iteri==0) and VISUALIZE: 
@@ -219,7 +210,8 @@ def show_current_config():
 def generate_log_dir():
     global ARGS, LOG_DIR
     config = deepcopy(vars(ARGS))
-    ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", "minlr", "seed", "pipe"]
+    ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", 
+                   "minlr", "seed", "checkpoint", "earlystop", "epatience", "pipe"]
     for key in ignore_keys:
         config.pop(key, None)
     rest = ""
@@ -284,11 +276,14 @@ def main():
         batch_size = ARGS.batchsize
         lr = ARGS.learnrate
         val_freq = ARGS.valfreq
+        early_stop = ARGS.earlystop
+        epoch_patience = ARGS.epatience
+        if not early_stop:
+            print("WARNING: Early stop is disabled, epoch patience will not be used.")
 
         # factor = ARGS.factor
         # lr_patience = ARGS.lrpatience
         # min_lr = ARGS.minlr
-        # epoch_patience = 2
 
         show_current_config()
 
@@ -316,34 +311,47 @@ def main():
             train_losses = []
             val_losses = []
             accuracies = []
-            print('Training started.')
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
             epoch = 1
+            worse_count = 0
             try:
                 for epoch in range(start_epoch, max_epoch + 1): 
                     #TODO: autoset epoch later
+                    print('\nTraining started:')
                     train_loss = train(train_loader, net, device, criterion, optimizer, epoch)
-                    print('Training loss (AVG) for current epoch: %.4f' % train_loss)
+                    print('* Training loss (AVG) for current epoch: %.4f' % train_loss)
                     train_losses.append(train_loss)
 
                     # Perform validation periodically
                     if (val_freq == 1) or (epoch % val_freq == 0):
-                        print('Validation started.')
+                        print('\nValidation started:')
                         val_loss, acc = test(val_loader, net, device, criterion, epoch=epoch, eval=True)
                         val_losses.append(val_loss)
                         accuracies.append(acc)
                         # scheduler.step(val_loss)
-                        print('Validation loss (AVG): %.4f' % val_loss)
-                        print('Achieved accuracy: %.4f' % acc)
+                        print('* Validation loss (AVG): %.4f' % val_loss)
                         print('Validation finished!')
+                        print('\n* Achieved accuracy (AVG): %.4f' % acc)
                     
-                    # If more than 2 epochs passed and the current loss is lower, accuracy is higher than previous
-                    if len(accuracies) < 2 or (train_losses[-1] < train_losses[-2]) and (accuracies[-1] > accuracies[-2]):
-                        print('Saving current state at the end of epoch %d' % (epoch))
-                        torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
+                    # If at least 2 epochs passed
+                    if epoch >= 2:
+                        # Better if accuracy is higher than previous state
+                        is_better = (accuracies[-1] > accuracies[-2])
+                        if is_better:
+                            print('\nSaving current state at the end of epoch %d' % (epoch))
+                            torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
+                            worse_count = 0
+                        else:
+                            worse_count += 1
 
+                    # If early stopping enabled and model gets worse stop early
+                    if (early_stop and worse_count > epoch_patience):
+                        print("\nNo improvement observed in accuracy for {} epoch(s), terminating...\n"
+                              .format(epoch_patience))
+                        break
+                         
             except KeyboardInterrupt:
-                print("\nKeyboard interrupt, stoping execution...")
+                print("\nKeyboard interrupt, stoping execution...\n")
                 
             finally:
                 print('Training finished!')
