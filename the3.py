@@ -37,22 +37,30 @@ def get_pad_count(n, s, f):
     assert padding.is_integer()
     return int(padding)
 
-# CNN
+# CNN TODO: control, rerun cl: 1 tests
 class ColorNet(nn.Module):
     def __init__(self):
         super(ColorNet, self).__init__()
+
         # Adding layers
         self.layers = []
+
         # Get padding needed
         pad = get_pad_count(80, 1, ARGS.kernelsize)
         layer_count = ARGS.clayers
         kernel_count = ARGS.kernelcount if layer_count > 1 else 3
         kernel_size = ARGS.kernelsize
+
         # First layer: (input image channel: 1, output channel: K or 3, square kernel: FxF)
         clayer = nn.Conv2d(in_channels=1, out_channels=kernel_count, kernel_size=kernel_size, 
                            bias=True, padding=pad)
-        relu = nn.ReLU()
-        self.layers.extend([clayer, relu])
+        self.layers.append(clayer)
+
+        # Do NOT add ReLU if there is single layer
+        if (layer_count > 1):
+            relu = nn.ReLU()
+            self.layers.append(relu)
+        
         # Mid layers
         for i in range(0, layer_count-2): # Total-First-Last
             # Conv Layer: (input image channel: K, output channel: K, square kernel: FxF)
@@ -61,11 +69,18 @@ class ColorNet(nn.Module):
             # Apply ReLU
             relu = nn.ReLU()
             self.layers.extend([clayer, relu])
+
         # Last layer
         if layer_count > 1:
             clayer = nn.Conv2d(in_channels=kernel_count, out_channels=3, kernel_size=kernel_size, 
                             bias=True, padding=pad)
             self.layers.append(clayer)
+
+        # Add tanh layer if specified
+        if ARGS.tanh:
+            tanh = nn.Tanh()
+            self.layers.append(tanh)
+
         # Place layers in a sequence 
         self.layers = nn.Sequential(*self.layers)
         print(self.layers)
@@ -210,8 +225,8 @@ def show_current_config():
 def generate_log_dir():
     global ARGS, LOG_DIR
     config = deepcopy(vars(ARGS))
-    ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", 
-                   "minlr", "seed", "checkpoint", "earlystop", "epatience", "pipe"]
+    ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", "minlr", "seed",
+                   "checkpoint", "earlystop", "epatience", "tanh", "batchnorm", "pipe"]
     for key in ignore_keys:
         config.pop(key, None)
     rest = ""
@@ -238,11 +253,23 @@ def main():
     ARGS = arg_handler()
     # If required args are parsed properly
     if ARGS:
-        # Args that can not be overridden
+        # Args
         pipe = ARGS.pipe
         useGPU = ARGS.gpu
         checkpoint_path = ARGS.checkpoint
         seed = ARGS.seed
+        max_epoch = ARGS.maxepoch
+        batch_size = ARGS.batchsize
+        lr = ARGS.learnrate
+        val_freq = ARGS.valfreq
+        early_stop = ARGS.earlystop
+        epoch_patience = ARGS.epatience
+        if not early_stop:
+            print("WARNING: Early stop is disabled, epoch patience will not be used.")
+
+        # factor = ARGS.factor
+        # lr_patience = ARGS.lrpatience
+        # min_lr = ARGS.minlr
 
         # Construct network
         torch.manual_seed(seed)
@@ -257,33 +284,10 @@ def main():
             found = re.search(check_rxp, checkpoint_path)
             path = found.group(1)
             entire = found.group(2)
-            start_epoch = int(re.search(check_rxp, checkpoint_path).group(3))
-            # print('Loading the net from file: "{}"...'.format(entire))
-            # net.load_state_dict(torch.load(checkpoint_path))
-
-            config = "config.txt"
-            conf_rxp = r'- (.+): (\d+(?:\.\d*)*|\w*)'
-            print('Restoring net parameters from file: "{}" and overriding existing...'.format(config))
-            lines = ""
-            with open(path + config, "r") as conf:
-                lines = "".join(conf.readlines())
-                params = re.findall(conf_rxp, lines)
-                override_config(params)
+            start_epoch = int(re.search(check_rxp, checkpoint_path).group(3)) + 1 # Previous one is already completed
+            print('\nLoading the net from file: "{}"...'.format(entire))
+            net.load_state_dict(torch.load(checkpoint_path))
             print('Loading completed. Training will start from epoch: {}'.format(start_epoch))
-
-        # Args that can be overridden
-        max_epoch = ARGS.maxepoch
-        batch_size = ARGS.batchsize
-        lr = ARGS.learnrate
-        val_freq = ARGS.valfreq
-        early_stop = ARGS.earlystop
-        epoch_patience = ARGS.epatience
-        if not early_stop:
-            print("WARNING: Early stop is disabled, epoch patience will not be used.")
-
-        # factor = ARGS.factor
-        # lr_patience = ARGS.lrpatience
-        # min_lr = ARGS.minlr
 
         show_current_config()
 
@@ -300,7 +304,7 @@ def main():
         run_test = run_full or (pipe == "test")
 
         # Get loaders as dict
-        loaders = get_loaders(ARGS.batchsize, device, load_train=run_train, load_test=run_test)
+        loaders = get_loaders(batch_size, device, load_train=run_train, load_test=run_test)
 
         # Training mode
         if (run_train):
@@ -333,8 +337,8 @@ def main():
                         print('Validation finished!')
                         print('\n* Achieved accuracy (AVG): %.4f' % acc)
                     
-                    # If at least 2 epochs passed
-                    if epoch >= 2:
+                    # If at least 2 epochs passed from the start
+                    if epoch >= start_epoch + 1:
                         # Better if accuracy is higher than previous state
                         is_better = (accuracies[-1] > accuracies[-2])
                         if is_better:
@@ -356,13 +360,17 @@ def main():
             finally:
                 print('Training finished!')
                 print('Saving training data...')
-                draw_train_val_plots(train_losses, val_losses, path=LOG_DIR)
-                draw_accuracy_plot(accuracies, len(train_losses), path=LOG_DIR)
+                draw_train_val_plots(train_losses, val_losses, path=LOG_DIR, show=False)
+                draw_accuracy_plot(accuracies, len(train_losses), path=LOG_DIR, show=False)
                 stats = {
                     'train_losses': train_losses,
                     'val_losses': val_losses,
                     'accuracies': accuracies,
                     'total_epoch': epoch,
+                    'max_accuracy': np.max(accuracies),
+                    'min_accuracy': np.min(accuracies),
+                    'max_loss': np.max(val_losses),
+                    'min_loss': np.min(val_losses),
                     'best_accuracy_epoch': np.argmax(accuracies) + 1,
                     'best_loss_epoch': (np.argmin(val_losses) + 1) * val_freq,
                 }
@@ -378,4 +386,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-# TODO: Add Early Stopping feature
+# TODO: Improve Early Stopping feature
+# TODO: Fix evaluate issue
+# TODO: Add batch norm init 

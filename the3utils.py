@@ -59,12 +59,20 @@ class CustomFormatter(argparse.HelpFormatter):
                 parts[-1] += ' %s' % args_string
             return ', '.join(parts)
 
-def check_positive(value):
+def check_positive_int(value):
     try:
         value = int(value)
         assert (value > 0)
     except Exception as e:
         raise argparse.ArgumentTypeError("Positive integer is expected but got: {}".format(value))
+    return value
+
+def check_positive_float(value):
+    try:
+        value = float(value)
+        assert (value > 0)
+    except Exception as e:
+        raise argparse.ArgumentTypeError("Positive float is expected but got: {}".format(value))
     return value
 
 def check_non_negative(value):
@@ -101,11 +109,11 @@ def arg_handler():
     parser.add_argument("-h", "--help", help="Help message", action="store_true")
     parser.add_argument("--gpu", help="Use GPU (default: False)", action="store_true", default=False)
     parser.add_argument("--maxepoch",  help="Specify max number of epochs for training (default: 100)",
-                        type=check_positive, default=100, metavar="EPOCH")
+                        type=check_positive_int, default=100, metavar="EPOCH")
     parser.add_argument("--valfreq", help="Specify validation frequency in terms of epochs (default: 1)",
-                        type=check_positive, default=1, metavar="FREQ")
+                        type=check_positive_int, default=1, metavar="FREQ")
     # parser.add_argument("--factor", help="Specify learning rate decaying factor (default: 0.1)",
-    #                     type=check_positive, default=0.1)
+    #                     type=check_positive_int, default=0.1)
     # parser.add_argument("--lrpatience", help="Specify patience for learning rate in terms of epochs (default: 0)",
     #                     type=check_non_negative, default=0, metavar="EPOCHS")
     # parser.add_argument("--minlr", help="Specify minimum possible learning rate (default: 0.0001)",
@@ -117,23 +125,27 @@ def arg_handler():
     parser.add_argument("--earlystop", help="Enable early stop (default: False)", action="store_true", default=False)
     parser.add_argument("--epatience", help="Specify patience for early stop in terms of epochs (default: 5)",
                         type=check_non_negative, default=5)
+    parser.add_argument("--tanh", help="Add tanh activation at the end (default: False)", 
+                        action="store_true", default=False)
+    parser.add_argument("--batchnorm", help="Add batch norm layer after each intermediate conv layer (default: False)", 
+                        action="store_true", default=False)
 
     # Required flags
     enable_exec = ("-h" not in sys.argv)
     group = parser.add_argument_group(title='required arguments')
     group.add_argument("-p", "--pipe",  help="Specify pipeline execution mode", type=str,
                        choices=['train', 'test', 'full'], required=enable_exec, action=UniqueStore)
-    group.add_argument("-bs", "--batchsize",  help="Specify batch size (e.g. 16)", type=check_positive, 
+    group.add_argument("-bs", "--batchsize",  help="Specify batch size (e.g. 16)", type=check_positive_int, 
                        metavar="BATCH", required=enable_exec)
     # group.add_argument
     group.add_argument("-cl", "--clayers",  help="Specify number of convolutional layers (e.g. 1, 2, 4)", 
-                       type=check_positive, metavar="CONV", required=enable_exec)
-    group.add_argument("-ks", "--kernelsize",  help="Specify kernel size (e.g. 3, 5)", type=check_positive, 
+                       type=check_positive_int, metavar="CONV", required=enable_exec)
+    group.add_argument("-ks", "--kernelsize",  help="Specify kernel size (e.g. 3, 5)", type=check_positive_int, 
                        metavar="SHAPE", required=enable_exec)
-    group.add_argument("-kc", "--kernelcount",  help="Specify number of kernels (e.g. 2, 4, 8)", type=check_positive,
+    group.add_argument("-kc", "--kernelcount",  help="Specify number of kernels (e.g. 2, 4, 8)", type=check_positive_int,
                        metavar="COUNT", required=enable_exec)
     group.add_argument("-lr", "--learnrate",  help="Specify learning rate (e.g. in range (0.0001, 0.1))", 
-                       type=check_lr, metavar="LR", required=enable_exec)
+                       type=check_positive_float, metavar="LR", required=enable_exec)
 
     args = parser.parse_args()
 
@@ -314,7 +326,7 @@ def write_image_paths(image_paths):
         file.write('\n'.join(image_paths))
 
 def evaluate(preds, targets):
-    preds, targets = denorm_vfunc(preds.numpy()), denorm_vfunc(targets.numpy())
+    preds, targets = denorm_vfunc(preds.cpu().numpy()), denorm_vfunc(targets.cpu().numpy())
     im_size = np.prod(preds.shape[1:])
     accs_per_image = (np.abs(targets - preds) < 12).sum(axis=(1,2,3)) / im_size
     avg_acc = np.mean(accs_per_image)
