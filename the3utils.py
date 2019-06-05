@@ -300,9 +300,11 @@ def prepare_plot(ax, losses, epochs, color, label):
     ax.legend()
 
 def write_preds(path, preds, type):
-    preds = denorm_vfunc(preds.numpy())
+    # Change the order of the axes
+    preds = preds.permute(0, 2, 3, 1).numpy()
+    preds = denorm_vfunc(preds)
     filename = "estimations_" + type
-    print('Saving estimations to file {}...'.format(filename))
+    print('\nSaving estimations to file {}...'.format(filename))
     np.save(path + "/" + filename, preds)
     print('Saved!')
 
@@ -317,8 +319,8 @@ def get_file_paths(top_folder, sub_folder, sub_sub_folder):
     file_paths = []
     foldername = top_folder + "/" + sub_folder + "/" + sub_sub_folder + "/"
     images = os.listdir(foldername)
-    sorted_images = sorted(images, key=lambda x: int(os.path.splitext(x)[0]))
-    image_paths = [foldername + image for image in sorted_images]
+    # images = sorted(images, key=lambda x: int(os.path.splitext(x)[0]))
+    image_paths = [foldername + image for image in images]
     return image_paths
 
 def write_image_paths(image_paths):

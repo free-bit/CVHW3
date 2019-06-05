@@ -6,7 +6,7 @@ DEVICES = {False: 'cpu', True: 'cuda'}
 LOG_DIR = 'checkpoints'
 VISUALIZE = False # set True to visualize input, prediction and the output from the last batch
 DATA_ROOT = 'ceng483-s19-hw3-dataset'
-FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'test'}
+FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'val'} # TODO: change when test set available
 
 # --- imports ---
 from copy import deepcopy
@@ -21,14 +21,14 @@ def get_loaders(batch_size, device, **kwargs):
     loaders = {}
     if load_train:
         # indices = range(100) # TODO: For sanity check
-        train_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'train'), device=device)
+        train_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, FOLDERS['train']), device=device)
         # train_set = torch.utils.data.Subset(train_set, indices) # TODO: For sanity check
         loaders['train'] = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0)
-        val_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'val'), device=device)
+        val_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, FOLDERS['validation']), device=device)
         # val_set = torch.utils.data.Subset(val_set, indices) # TODO: For sanity check
         loaders['val'] = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0)
     if load_test:
-        test_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, 'test'), device=device)
+        test_set = HW3ImageFolder(root=os.path.join(DATA_ROOT, FOLDERS['test']), device=device)
         loaders['test'] = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=0)
     return loaders
 
@@ -37,7 +37,7 @@ def get_pad_count(n, s, f):
     assert padding.is_integer()
     return int(padding)
 
-# CNN TODO: control, rerun cl: 1 tests
+# CNN
 class ColorNet(nn.Module):
     def __init__(self):
         super(ColorNet, self).__init__()
@@ -56,8 +56,13 @@ class ColorNet(nn.Module):
                            bias=True, padding=pad)
         self.layers.append(clayer)
 
+        # Apply batch norm if specified
+        if ARGS.batchnorm:
+            batchnorm = nn.BatchNorm2d(kernel_count)
+            self.layers.append(batchnorm)   
+
         # Do NOT add ReLU if there is single layer
-        if (layer_count > 1):
+        if (layer_count > 1): 
             relu = nn.ReLU()
             self.layers.append(relu)
         
@@ -66,15 +71,27 @@ class ColorNet(nn.Module):
             # Conv Layer: (input image channel: K, output channel: K, square kernel: FxF)
             clayer = nn.Conv2d(in_channels=kernel_count, out_channels=kernel_count, kernel_size=kernel_size, 
                                bias=True, padding=pad)
+            self.layers.append(clayer)
+
+            # Apply batch norm if specified
+            if ARGS.batchnorm:
+                batchnorm = nn.BatchNorm2d(kernel_count)
+                self.layers.append(batchnorm)  
+                
             # Apply ReLU
             relu = nn.ReLU()
-            self.layers.extend([clayer, relu])
+            self.layers.append(relu)
 
         # Last layer
         if layer_count > 1:
             clayer = nn.Conv2d(in_channels=kernel_count, out_channels=3, kernel_size=kernel_size, 
                             bias=True, padding=pad)
             self.layers.append(clayer)
+
+            # Apply batch norm if specified
+            if ARGS.batchnorm:
+                batchnorm = nn.BatchNorm2d(3)
+                self.layers.append(batchnorm)  
 
         # Add tanh layer if specified
         if ARGS.tanh:
@@ -104,10 +121,11 @@ class AverageMeter(object):
     self.avg = self.sum / self.count
 
 def test(test_loader, net, device, criterion, **kwargs):
-    epoch = kwargs.get('epoch', None)
+    epoch = kwargs.get('epoch', 1)
     save = kwargs.get('save', False)
     type = kwargs.get('type', "validation")
     eval = kwargs.get('eval', False)
+    info_type = "Testing" if type == "test" else "Validating"
     all_preds = torch.Tensor() if save else None
     net.eval()
     with torch.no_grad():
@@ -132,7 +150,6 @@ def test(test_loader, net, device, criterion, **kwargs):
                 all_preds = torch.cat((all_preds, preds.cpu()), dim=0)
 
             if eval:
-                # file_list = get_file_paths(DATA_ROOT, FOLDERS[type], "images")
                 acc = evaluate(preds, targets)
 
             loss = criterion(preds, targets)
@@ -147,9 +164,9 @@ def test(test_loader, net, device, criterion, **kwargs):
                 # save_name = 'img-{}-epoch-{}.jpg'.format(i * test_loader.batch_size + j, epoch)
                 # to_rgb(inputs[j].cpu(), ab_input=preds[j].detach().cpu(), save_path=save_path, save_name=save_name)
 
-            # Print every print_freq mini-batches if validating
-            if epoch and (not iteri % print_freq):
-                print('- Validating: [E: %d, I: %3d] Loss %.4f' % (epoch, iteri, iter_loss.avg))
+            # Print every print_freq mini-batches if validating/testing
+            if (not iteri % print_freq):
+                print('- %s: [E: %d, I: %3d] Loss %.4f' % (info_type, epoch, iteri, iter_loss.avg))
                 iter_loss.reset()
         if save:
             write_preds(LOG_DIR, all_preds, type)
@@ -276,7 +293,7 @@ def main():
         device = torch.device(DEVICES[useGPU])
         print('Device: ' + str(device))
         net = ColorNet().to(device=device)
-        
+
         # Start from checkpoint if desired
         start_epoch = 1
         if checkpoint_path:
@@ -306,10 +323,11 @@ def main():
         # Get loaders as dict
         loaders = get_loaders(batch_size, device, load_train=run_train, load_test=run_test)
 
+        generate_log_dir()
+
         # Training mode
         if (run_train):
             # Initialization
-            generate_log_dir()
             train_loader = loaders['train']
             val_loader = loaders['val']
             train_losses = []
@@ -380,7 +398,10 @@ def main():
         elif (run_test):
             test_loader = loaders['test']
             print('Test started.')
-            test_loss, acc = test(test_loader, net, device, criterion, eval=True, type="test")
+            test_loss, acc = test(test_loader, net, device, criterion, eval=True, save=True, type="test")
+            print('* Validation loss (AVG): %.4f' % test_loss)
+            if acc:
+                print('* Achieved accuracy (AVG): %.4f' % acc)
             print('Test finished!')
 
 if __name__ == "__main__":
@@ -388,4 +409,3 @@ if __name__ == "__main__":
 
 # TODO: Improve Early Stopping feature
 # TODO: Fix evaluate issue
-# TODO: Add batch norm init 
