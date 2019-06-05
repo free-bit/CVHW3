@@ -123,8 +123,10 @@ def arg_handler():
     parser.add_argument("--checkpoint", help="Specify checkpoint for learning to start (default: -)",
                         type=str, default="")
     parser.add_argument("--earlystop", help="Enable early stop (default: False)", action="store_true", default=False)
-    parser.add_argument("--epatience", help="Specify patience for early stop in terms of epochs (default: 5)",
-                        type=check_non_negative, default=5)
+    parser.add_argument("--wpatience", help="Specify patience in epochs for worse accuracy (default: 3, early stop only)",
+                        type=check_non_negative, default=3)
+    parser.add_argument("--mpatience", help="Specify patience in epochs for non-max accuracy (default: 10, early stop only)",
+                        type=check_non_negative, default=10)
     parser.add_argument("--tanh", help="Add tanh activation at the end (default: False)", 
                         action="store_true", default=False)
     parser.add_argument("--batchnorm", help="Add batch norm layer after each intermediate conv layer (default: False)", 
@@ -183,7 +185,7 @@ def visualize_batch(inputs,preds,targets,save_path=''):
     preds = preds.cpu()
     targets = targets.cpu()
     plt.clf()
-    bs = inputs.shape[0]
+    bs = inputs.shape[0] if inputs.shape[0] < 5 else 5
     for j in range(bs):
         plt.subplot(3,bs,j+1)
         assert(inputs[j].shape[0]==1)
@@ -319,8 +321,8 @@ def get_file_paths(top_folder, sub_folder, sub_sub_folder):
     file_paths = []
     foldername = top_folder + "/" + sub_folder + "/" + sub_sub_folder + "/"
     images = os.listdir(foldername)
-    # images = sorted(images, key=lambda x: int(os.path.splitext(x)[0]))
-    image_paths = [foldername + image for image in images]
+    # images = sorted(images, key=lambda x: int(os.path.splitext(x)[0])): full sorted
+    image_paths = [foldername + image for image in sorted(images)]
     return image_paths
 
 def write_image_paths(image_paths):

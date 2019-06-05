@@ -6,7 +6,7 @@ DEVICES = {False: 'cpu', True: 'cuda'}
 LOG_DIR = 'checkpoints'
 VISUALIZE = False # set True to visualize input, prediction and the output from the last batch
 DATA_ROOT = 'ceng483-s19-hw3-dataset'
-FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'val'} # TODO: change when test set available
+FOLDERS = {'train': 'train', 'validation': 'val', 'test': 'test'}
 
 # --- imports ---
 from copy import deepcopy
@@ -125,6 +125,7 @@ def test(test_loader, net, device, criterion, **kwargs):
     save = kwargs.get('save', False)
     type = kwargs.get('type', "validation")
     eval = kwargs.get('eval', False)
+    visualize = kwargs.get('visualize', False)
     info_type = "Testing" if type == "test" else "Validating"
     all_preds = torch.Tensor() if save else None
     net.eval()
@@ -168,6 +169,8 @@ def test(test_loader, net, device, criterion, **kwargs):
             if (not iteri % print_freq):
                 print('- %s: [E: %d, I: %3d] Loss %.4f' % (info_type, epoch, iteri, iter_loss.avg))
                 iter_loss.reset()
+                if (visualize):
+                    visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, type+'_i{}.png'.format(iteri)))
         if save:
             write_preds(LOG_DIR, all_preds, type)
         return val_loss.avg, acc
@@ -210,7 +213,7 @@ def train(train_loader, net, device, criterion, optimizer, epoch):
     # Visualize results periodically
     draw_freq = 10 # TODO: argparse
     if (draw_freq == 1) or (epoch % draw_freq == 0):
-        visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'example_e{}.png'.format(epoch)))
+        visualize_batch(inputs, preds, targets, os.path.join(LOG_DIR, 'train_e{}.png'.format(epoch)))
 
     # Return the average loss for this epoch
     return epoch_loss.avg
@@ -243,7 +246,7 @@ def generate_log_dir():
     global ARGS, LOG_DIR
     config = deepcopy(vars(ARGS))
     ignore_keys = ["help", "gpu", "maxepoch", "valfreq", "factor", "lrpatience", "minlr", "seed",
-                   "checkpoint", "earlystop", "epatience", "tanh", "batchnorm", "pipe"]
+                   "checkpoint", "earlystop", "wpatience", "mpatience", "tanh", "batchnorm", "pipe"]
     for key in ignore_keys:
         config.pop(key, None)
     rest = ""
@@ -280,9 +283,10 @@ def main():
         lr = ARGS.learnrate
         val_freq = ARGS.valfreq
         early_stop = ARGS.earlystop
-        epoch_patience = ARGS.epatience
-        if not early_stop:
-            print("WARNING: Early stop is disabled, epoch patience will not be used.")
+        worse_patience = ARGS.wpatience
+        no_max_patience = ARGS.mpatience
+        if not early_stop and ("--wpatience" in sys.argv) or ("--mpatience" in sys.argv):
+            print("WARNING: Early stop is disabled, patience values will not be used.")
 
         # factor = ARGS.factor
         # lr_patience = ARGS.lrpatience
@@ -304,7 +308,7 @@ def main():
             start_epoch = int(re.search(check_rxp, checkpoint_path).group(3)) + 1 # Previous one is already completed
             print('\nLoading the net from file: "{}"...'.format(entire))
             net.load_state_dict(torch.load(checkpoint_path))
-            print('Loading completed. Training will start from epoch: {}'.format(start_epoch))
+            print('Loaded from epoch: {}.'.format(start_epoch - 1))
 
         show_current_config()
 
@@ -336,6 +340,8 @@ def main():
             print('Validation will be done after every {} epoch(s)'.format(val_freq))
             epoch = 1
             worse_count = 0
+            no_max_count = 0
+            max_accuracy = -1
             try:
                 for epoch in range(start_epoch, max_epoch + 1): 
                     #TODO: autoset epoch later
@@ -355,22 +361,44 @@ def main():
                         print('Validation finished!')
                         print('\n* Achieved accuracy (AVG): %.4f' % acc)
                     
-                    # If at least 2 epochs passed from the start
-                    if epoch >= start_epoch + 1:
-                        # Better if accuracy is higher than previous state
-                        is_better = (accuracies[-1] > accuracies[-2])
-                        if is_better:
-                            print('\nSaving current state at the end of epoch %d' % (epoch))
-                            torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
-                            worse_count = 0
-                        else:
-                            worse_count += 1
+                        is_max = acc > max_accuracy
+                        is_better = True
+                        
+                        # When at least 2 epochs passed from the start, perform actual check for better model
+                        if epoch >= start_epoch + 1:
+                            # Model is better if current accuracy is higher than that of previous state
+                            is_better = (accuracies[-1] > accuracies[-2])
+                        
+                        # Save the model if it is better and maximum up until now
+                        if is_max:
+                            # Update maximum accuracy
+                            max_accuracy = acc
+                            if is_better:
+                                print('\nSaving current state at the end of epoch %d' % (epoch))
+                                torch.save(net.state_dict(), os.path.join(LOG_DIR, 'checkpoint_e{}.pt'.format(epoch)))
 
-                    # If early stopping enabled and model gets worse stop early
-                    if (early_stop and worse_count > epoch_patience):
-                        print("\nNo improvement observed in accuracy for {} epoch(s), terminating...\n"
-                              .format(epoch_patience))
-                        break
+                        # If early stopping enabled...
+                        if early_stop:
+                            # ...and model gets better continue
+                            if is_better:
+                                worse_count = 0
+                            # ...and model gets worse more than patience stop early
+                            else:
+                                worse_count += 1
+                                if (worse_count > worse_patience):
+                                    print("\nPerformance got worse for more than {} epoch(s), terminating at epoch: {}...\n"
+                                            .format(worse_patience, epoch))
+                                    break
+                            # ...and model achieves max accuracy continue
+                            if is_max:
+                                no_max_for = 0
+                            # ...and model can not achieve max accuracy more than patience stop early
+                            else:
+                                no_max_for += 1
+                                if (no_max_for > no_max_patience):
+                                    print("No max seen for more than {} epoch(s), terminating at epoch: {}...\n"
+                                        .format(no_max_patience, epoch))
+                                    break
                          
             except KeyboardInterrupt:
                 print("\nKeyboard interrupt, stoping execution...\n")
@@ -406,6 +434,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# TODO: Improve Early Stopping feature
-# TODO: Fix evaluate issue
